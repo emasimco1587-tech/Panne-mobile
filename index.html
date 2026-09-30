@@ -49,6 +49,24 @@ button:hover{border-color:var(--muted)}
 .item .s{grid-column:2/4;color:var(--muted);font-size:12px}
 .item .a{color:var(--muted);font-size:12px;white-space:nowrap}
 #map{height:100%;width:100%;background:var(--bg)}
+.tabs{display:flex;border-bottom:1px solid var(--line)}
+.tabs button{flex:1;border:0;border-radius:0;background:transparent;padding:10px 6px;border-bottom:2px solid transparent;color:var(--muted);font-weight:600}
+.tabs button.on{color:var(--text);border-bottom-color:var(--text)}
+.tabs b{font-variant-numeric:tabular-nums;background:var(--chip);border-radius:99px;padding:0 7px;margin-left:4px;font-size:12px}
+.pane{display:none;flex-direction:column;min-height:0;flex:1}
+.pane.on{display:flex}
+.aset{padding:8px 14px;border-bottom:1px solid var(--line);display:grid;gap:6px;font-size:13px}
+.aset label{display:flex;align-items:center;gap:8px}
+.aset input[type=range]{flex:1}
+.lvl{display:inline-block;font-size:11px;font-weight:700;border-radius:4px;padding:1px 6px;color:#fff;white-space:nowrap}
+.lvl.forte{background:#c62828}.lvl.moyenne{background:#ef6c00}.lvl.faible{background:#b58900}
+.alert{padding:9px 14px;border-bottom:1px solid var(--line);cursor:pointer;display:grid;grid-template-columns:1fr auto;gap:2px 8px}
+.alert:hover{background:var(--chip)}
+.alert .n{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.alert .s{grid-column:1/3;color:var(--muted);font-size:12px}
+.alert .ops{grid-column:1/3;display:flex;gap:4px;flex-wrap:wrap}
+.alert .ops span{font-size:11px;border-radius:4px;padding:0 5px;border:1px solid var(--line)}
+.note{padding:10px 14px;color:var(--muted);font-size:12px}
 .legend{position:absolute;right:12px;bottom:24px;z-index:500;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:8px 10px;box-shadow:var(--shadow);font-size:12px;display:grid;gap:4px}
 .legend span{display:inline-flex;align-items:center;gap:6px}
 .pin{width:14px;height:14px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.35)}
@@ -118,8 +136,25 @@ body.dragging #map{outline:4px dashed var(--bouygues);outline-offset:-8px}
           <input type="file" id="file" accept=".csv,text/csv" multiple hidden>
         </div>
       </div>
-      <div class="count" id="count"></div>
-      <div class="list" id="list"></div>
+      <div class="tabs">
+        <button data-tab="alerts" class="on">⚠️ Alertes postes<b id="nAlerts">…</b></button>
+        <button data-tab="sites">📡 Sites en panne<b id="nSites">…</b></button>
+      </div>
+      <div class="pane on" id="pane-alerts">
+        <div class="aset">
+          <label>Rayon d'impact <input type="range" id="rayon" min="1" max="15" step="0.5" value="5"> <b id="rayonV">5 km</b></label>
+          <div style="display:flex;align-items:center;gap:8px">Niveau minimum
+            <select id="lvlMin"><option value="faible">Toutes</option><option value="moyenne">Moyenne et forte</option><option value="forte">Forte seulement</option></select>
+            <label style="margin-left:auto"><input type="checkbox" id="showAlerts" checked> sur la carte</label>
+          </div>
+        </div>
+        <div class="count" id="countA"></div>
+        <div class="list" id="alerts"></div>
+      </div>
+      <div class="pane" id="pane-sites">
+        <div class="count" id="count"></div>
+        <div class="list" id="list"></div>
+      </div>
     </aside>
     <div style="position:relative;min-height:0">
       <div id="map"></div>
@@ -141,6 +176,7 @@ body.dragging #map{outline:4px dashed var(--bouygues);outline-offset:-8px}
         <span><i class="pin" style="background:#444"></i> Voix et data coupées</span>
         <span><i class="pin p" style="border-color:#444"></i> Coupure partielle / dégradé</span>
         <span><i class="pin m" style="background:#444"></i> Carré = maintenance programmée</span>
+        <span><i class="pin" style="background:transparent;border:3px solid #c62828;box-shadow:none"></i> Poste en alerte (forte / <b style="color:#ef6c00">moyenne</b> / <b style="color:#b58900">faible</b>)</span>
       </div>
     </div>
   </div>
@@ -163,15 +199,15 @@ const SOURCES = [
    remote:'https://www.bouyguestelecom.fr/static/com/assets/reseau/siteshs/downloads/antennesindisponibles.csv'},
 ];
 const AUTO_REFRESH_MIN = 30;   // la page relit les fichiers toutes les 30 min
-// Postes électriques haute tension — positions OpenStreetMap (RTE ne publie plus les coordonnées)
+// Postes électriques haute tension : positions OpenStreetMap (RTE ne publie plus les coordonnées)
 const POSTES = {
-  local:'data/postes-ht.geojson',               // copie hebdomadaire faite par la GitHub Action
+  files:['data/postes-ht.geojson','postes-ht.geojson'],   // copie faite par la GitHub Action (1 fois/semaine)
   mirrors:['https://overpass-api.de/api/interpreter','https://overpass.private.coffee/api/interpreter',
            'https://overpass.kumi.systems/api/interpreter','https://maps.mail.ru/osm/tools/overpass/api/interpreter'],
-  // France métropolitaine découpée en 6 zones [sud,ouest,nord,est] pour éviter les délais dépassés
-  tiles:[[41,-5.5,44.5,2],[41,2,44.5,10],[44.5,-5.5,47.5,2],[44.5,2,47.5,10],[47.5,-5.5,51.5,2],[47.5,2,51.5,10]],
-  query:b=>`[out:json][timeout:90];nwr["power"="substation"]["voltage"~"(^|;)(63|90|150|225|400)000"](${b.join(',')});out center tags;`,
+  query:b=>`[out:json][timeout:60];nwr["power"="substation"]["voltage"~"(^|;)(63|90|150|225|400)000"](${b.join(',')});out center tags;`,
+  cacheDays:7,
 };
+(()=>{ const L_=[[41,44],[44,46],[46,48.5],[48.5,51.5]], W=[[-5.5,0.5],[0.5,5],[5,10]]; POSTES.tiles=[]; for(const [s,n] of L_) for(const [w,e] of W) POSTES.tiles.push([s,w,n,e]); })();
 /* ======================================= */
 
 const $ = s => document.querySelector(s);
@@ -387,6 +423,8 @@ function render(){
   // liste
   const tot=list.filter(s=>s.level==='total').length;
   $('#count').textContent=`${list.length} site(s) affiché(s) · ${tot} sans voix ni data`;
+  $('#nSites').textContent=list.length;
+  renderAlerts(list);
   const sorted=[...list].sort((a,b)=>(b.debut||0)-(a.debut||0)).slice(0,500);
   $('#list').innerHTML=sorted.map((s,i)=>{ const d=days(s.debut);
     return `<div class="item" data-i="${i}"><i class="d ${s.level==='total'?'':'p'}" style="${s.level==='total'?'background':'border-color'}:${color(s.op)}"></i>
@@ -425,42 +463,139 @@ function postePopup(p,kv){
     <a target="_blank" rel="noopener" href="https://www.openstreetmap.org/${p.osm}">OpenStreetMap ↗</a>
     <div class="meta" style="margin:6px 0 0">Position : © contributeurs OpenStreetMap (ODbL).</div></div>`;
 }
-async function loadPostes(){
-  const info=$('#postesInfo'); info.textContent='chargement…';
-  let gj=null;
-  try{ const r=await fetch(POSTES.local+'?t='+Date.now(),{cache:'no-store'}); if(r.ok) gj=await r.json(); }catch{}
-  if(!gj?.features?.length){
-    const seen=new Set(), feats=[]; let ok=0;
-    for(const [i,t] of POSTES.tiles.entries()){
-      info.textContent=`chargement OpenStreetMap… zone ${i+1}/${POSTES.tiles.length}`;
-      let done=false;
-      for(const m of POSTES.mirrors){
-        try{
-          const ctl=new AbortController(); const to=setTimeout(()=>ctl.abort(),100000);
-          const r=await fetch(m,{method:'POST',signal:ctl.signal,body:'data='+encodeURIComponent(POSTES.query(t)),headers:{'Content-Type':'application/x-www-form-urlencoded'}});
-          clearTimeout(to); if(!r.ok) continue;
-          for(const f of osmToGeoJSON(await r.json()).features){ if(!seen.has(f.properties.osm)){ seen.add(f.properties.osm); feats.push(f); } }
-          done=true; ok++; break;
-        }catch{}
-      }
-      if(!done) console.warn('Zone postes non chargée',t);
-    }
-    if(!feats.length){ info.textContent='indisponible (serveurs OpenStreetMap saturés), réessaie dans quelques minutes'; return false; }
-    gj={features:feats}; if(ok<POSTES.tiles.length) setTimeout(()=>info.insertAdjacentText('beforeend',` · ${POSTES.tiles.length-ok} zone(s) manquante(s)`),0);
+const postes=[]; let postesLoading=null;
+function postesFromGeo(gj){
+  const out=[];
+  for(const f of gj.features||[]){
+    const g=f.geometry; if(!g) continue;
+    let c=g.type==='Point'?g.coordinates:null;
+    if(!c){ const pts=[]; (function w(a){ if(typeof a[0]==='number') pts.push(a); else a.forEach(w); })(g.coordinates||[]);
+      if(!pts.length) continue; c=[pts.reduce((s,p)=>s+p[0],0)/pts.length, pts.reduce((s,p)=>s+p[1],0)/pts.length]; }
+    const p={...(f.properties||{})}; p.osm=p.osm||p['@id']||f.id||'';
+    const kv=kvList(p.voltage); const t=kv.length?Math.max(...kv):null;
+    const code=(p['ref:FR:RTE']||p['ref:RTE']||'').trim();
+    out.push({lat:c[1],lon:c[0],p,kv,t,code,name:p.name||p['name:fr']||code||'Poste sans nom'});
   }
-  postesLayer.clearLayers(); let n=0;
-  for(const f of gj.features){ const c=f.geometry?.coordinates; if(!c) continue;
-    const p=f.properties||{}; const kv=kvList(p.voltage); const t=kv.length?Math.max(...kv):null;
-    L.circleMarker([c[1],c[0]],{renderer:canvasR,radius:t>=380?5:t>=200?4:3,color:'#fff',weight:1,fillColor:tColor(t),fillOpacity:.9})
-      .bindPopup(()=>postePopup(p,kv)).addTo(postesLayer); n++; }
-  postesLoaded=n>0;
-  info.innerHTML=`${n} postes · <span style="color:#e3001b">●</span>400 <span style="color:#00a650">●</span>225 <span style="color:#1f6fd1">●</span>150 <span style="color:#f28c00">●</span>90 <span style="color:#8e44ad">●</span>63 kV`;
-  return postesLoaded;
+  return out;
+}
+async function fetchPostesOSM(info){
+  const seen=new Set(), feats=[]; let ok=0;
+  for(const [i,t] of POSTES.tiles.entries()){
+    info.textContent=`chargement OpenStreetMap… zone ${i+1}/${POSTES.tiles.length}`;
+    for(const m of POSTES.mirrors){
+      try{
+        const ctl=new AbortController(); const to=setTimeout(()=>ctl.abort(),75000);
+        const r=await fetch(m,{method:'POST',signal:ctl.signal,body:'data='+encodeURIComponent(POSTES.query(t)),headers:{'Content-Type':'application/x-www-form-urlencoded'}});
+        clearTimeout(to); if(!r.ok) continue;
+        for(const f of osmToGeoJSON(await r.json()).features){ if(!seen.has(f.properties.osm)){ seen.add(f.properties.osm); feats.push(f); } }
+        ok++; break;
+      }catch{}
+    }
+  }
+  return {gj:{type:'FeatureCollection',features:feats}, complete:ok===POSTES.tiles.length};
+}
+function loadPostes(){
+  if(postesLoading) return postesLoading;
+  return postesLoading=(async()=>{
+    const info=$('#postesInfo'); info.textContent='chargement…';
+    let gj=null, src='';
+    for(const u of POSTES.files){ try{ const r=await fetch(u,{cache:'no-cache'}); if(r.ok){ const j=await r.json(); if(j?.features?.length){ gj=j; src='fichier'; break; } } }catch{} }
+    if(!gj){ try{ const c=JSON.parse(localStorage.getItem('postesHT')||'null'); if(c && Date.now()-c.at < POSTES.cacheDays*864e5){ gj=c.gj; src='cache'; } }catch{} }
+    if(!gj){ const r=await fetchPostesOSM(info); if(r.gj.features.length){ gj=r.gj; src='OSM';
+        if(r.complete){ try{ localStorage.setItem('postesHT',JSON.stringify({at:Date.now(),gj})); }catch{} } } }
+    if(!gj){ info.textContent='indisponible (serveurs OpenStreetMap saturés) — réessaie plus tard'; postesLoading=null; return false; }
+    postes.length=0; postes.push(...postesFromGeo(gj)); postesLayer.clearLayers();
+    for(const P of postes){ P.m=L.circleMarker([P.lat,P.lon],{renderer:canvasR,radius:P.t>=380?5:P.t>=200?4:3,color:'#fff',weight:1,fillColor:tColor(P.t),fillOpacity:.9})
+      .bindPopup(()=>postePopup(P.p,P.kv)+alertDetail(P)).addTo(postesLayer); }
+    buildGrid(); postesLoaded=true;
+    info.innerHTML=`${postes.length} postes · <span style="color:#e3001b">●</span>400 <span style="color:#00a650">●</span>225 <span style="color:#1f6fd1">●</span>150 <span style="color:#f28c00">●</span>90 <span style="color:#8e44ad">●</span>63 kV`;
+    render(); return true;
+  })();
 }
 $('#fPostes').onchange=async e=>{
-  if(e.target.checked){ if(!postesLoaded && !(await loadPostes())){ e.target.checked=false; return; } postesLayer.addTo(map); }
+  if(e.target.checked){ if(!(await loadPostes())){ e.target.checked=false; return; } postesLayer.addTo(map); }
   else map.removeLayer(postesLayer);
 };
+
+/* ---------- Alertes : postes potentiellement impactés par une panne télécom ---------- */
+// Estimation : un site mobile en panne à moins de R km d'un poste peut priver ce poste de liaison mobile.
+// Poids : voix+data coupées = 1 · voix OU data coupée = 0,6 · service dégradé = 0,3 ; plus le site est proche, plus il compte.
+const LVL_ORDER={forte:3,moyenne:2,faible:1};
+const alertLayer=L.layerGroup().addTo(map), focusLayer=L.layerGroup().addTo(map);
+let grid=new Map(); const CELL=0.1;
+const cellKey=(la,lo)=>Math.floor(la/CELL)+':'+Math.floor(lo/CELL);
+function buildGrid(){ grid=new Map(); for(const P of postes){ const k=cellKey(P.lat,P.lon); (grid.get(k)||grid.set(k,[]).get(k)).push(P); } }
+function distKm(a,b,c,d){ const R=6371, r=Math.PI/180, x=(d-b)*r*Math.cos((a+c)/2*r), y=(c-a)*r; return R*Math.sqrt(x*x+y*y); }
+const weightOf=s=> s.level==='total'?1 : (s.vHS||s.dHS)?0.6 : 0.3;
+let lastAlerts=[];
+function computeAlerts(list){
+  const R=+$('#rayon').value; const hits=new Map();
+  const dy=Math.ceil(R/11)+1, dx=Math.ceil(R/7)+1;
+  for(const s of list){ if(s.level==='ok') continue;
+    const cy=Math.floor(s.lat/CELL), cx=Math.floor(s.lon/CELL);
+    for(let y=cy-dy;y<=cy+dy;y++) for(let x=cx-dx;x<=cx+dx;x++){
+      for(const P of grid.get(y+':'+x)||[]){ const d=distKm(P.lat,P.lon,s.lat,s.lon); if(d>R) continue;
+        (hits.get(P)||hits.set(P,[]).get(P)).push({s,d}); } } }
+  const res=[];
+  for(const [P,arr] of hits){
+    arr.sort((a,b)=>a.d-b.d);
+    const ops={}; let score=0;
+    for(const {s,d} of arr){ const w=weightOf(s); score+=w*(1-0.5*d/R); const o=ops[s.op]||(ops[s.op]={w:0,d:Infinity,n:0}); o.w=Math.max(o.w,w); o.d=Math.min(o.d,d); o.n++; }
+    const totalOps=Object.values(ops).filter(o=>o.w===1);
+    const lvl = (totalOps.some(o=>o.d<=R/2) || totalOps.length>=2) ? 'forte'
+              : (totalOps.length || Object.keys(ops).length>=2) ? 'moyenne' : 'faible';
+    res.push({P,arr,ops,score,lvl,near:arr[0].d});
+  }
+  res.sort((a,b)=>LVL_ORDER[b.lvl]-LVL_ORDER[a.lvl] || b.score-a.score);
+  return res;
+}
+const lvlColor={forte:'#c62828',moyenne:'#ef6c00',faible:'#b58900'};
+const lvlTxt={forte:'Forte',moyenne:'Moyenne',faible:'Faible'};
+const km=d=>d<1?Math.round(d*1000)+' m':d.toFixed(1).replace('.',',')+' km';
+function renderAlerts(list){
+  $('#rayonV').textContent=$('#rayon').value.replace('.',',')+' km';
+  if(!postesLoaded){ $('#nAlerts').textContent='…'; $('#countA').textContent='Chargement des postes électriques…'; $('#alerts').innerHTML=''; alertLayer.clearLayers(); return; }
+  const min=LVL_ORDER[$('#lvlMin').value];
+  const all=computeAlerts(list); lastAlerts=all.filter(a=>LVL_ORDER[a.lvl]>=min);
+  const byL=l=>all.filter(a=>a.lvl===l).length;
+  $('#nAlerts').textContent=lastAlerts.length;
+  $('#countA').innerHTML=`${lastAlerts.length} poste(s) · <span class="lvl forte">${byL('forte')} forte</span> <span class="lvl moyenne">${byL('moyenne')} moyenne</span> <span class="lvl faible">${byL('faible')} faible</span>`;
+  const shown=lastAlerts.slice(0,400);
+  $('#alerts').innerHTML = shown.length ? shown.map((a,i)=>`<div class="alert" data-i="${i}">
+      <span class="n">${esc(a.P.name)}${a.P.t?` <span style="color:var(--muted);font-weight:400">${a.P.kv.join('/')} kV</span>`:''}</span><span class="lvl ${a.lvl}">${lvlTxt[a.lvl]}</span>
+      <span class="s">${a.arr.length} site(s) en panne à moins de ${$('#rayon').value.replace('.',',')} km · le plus proche à ${km(a.near)}</span>
+      <span class="ops">${Object.entries(a.ops).map(([op,o])=>`<span style="border-color:${color(op)};color:${color(op)}">${SOURCES.find(x=>x.id===op).name}${o.w===1?' ✕':' ~'} ${km(o.d)}</span>`).join('')}</span>
+    </div>`).join('') + (lastAlerts.length>400?'<div class="note">… liste limitée aux 400 premières alertes</div>':'')
+    : '<div class="note">Aucun poste électrique à proximité d\'une panne avec ces réglages.</div>';
+  document.querySelectorAll('.alert').forEach(el=>el.onclick=()=>focusAlert(shown[+el.dataset.i]));
+  alertLayer.clearLayers();
+  if($('#showAlerts').checked) for(const a of lastAlerts){
+    L.circleMarker([a.P.lat,a.P.lon],{radius:a.lvl==='forte'?11:a.lvl==='moyenne'?9:7,color:lvlColor[a.lvl],weight:3,fillColor:lvlColor[a.lvl],fillOpacity:.15})
+      .bindPopup(()=>postePopup(a.P.p,a.P.kv)+alertDetail(a.P)).on('click',()=>drawFocus(a)).addTo(alertLayer); }
+}
+function alertDetail(P){
+  const a=lastAlerts.find(x=>x.P===P); if(!a) return '';
+  return `<div class="pop"><div class="sep"></div><b style="color:${lvlColor[a.lvl]}">⚠️ Alerte ${lvlTxt[a.lvl].toLowerCase()} — liaison télécom potentiellement impactée</b>
+    <table>${a.arr.slice(0,8).map(({s,d})=>`<tr><td style="color:${color(s.op)};font-weight:600">${SOURCES.find(x=>x.id===s.op).name}</td><td>${esc(s.commune)} · ${km(d)}</td><td><span class="st ${s.level==='total'?'HS':'DE'}">${s.level==='total'?'voix+data':s.vHS?'voix':s.dHS?'data':'dégradé'}</span></td></tr>`).join('')}</table>
+    ${a.arr.length>8?`<div class="meta">+ ${a.arr.length-8} autre(s)</div>`:''}
+    <div class="meta">Estimation par distance : à confirmer avec l'opérateur.</div></div>`;
+}
+function drawFocus(a){
+  focusLayer.clearLayers();
+  L.circle([a.P.lat,a.P.lon],{radius:+$('#rayon').value*1000,color:lvlColor[a.lvl],weight:1.5,dashArray:'6 6',fill:true,fillOpacity:.05,interactive:false}).addTo(focusLayer);
+  for(const {s} of a.arr) L.polyline([[a.P.lat,a.P.lon],[s.lat,s.lon]],{color:color(s.op),weight:2,opacity:.8,dashArray:'4 4',interactive:false}).addTo(focusLayer);
+}
+function focusAlert(a){
+  drawFocus(a);
+  map.fitBounds(L.latLng(a.P.lat,a.P.lon).toBounds(+$('#rayon').value*2200),{maxZoom:13});
+  setTimeout(()=>L.popup().setLatLng([a.P.lat,a.P.lon]).setContent(postePopup(a.P.p,a.P.kv)+alertDetail(a.P)).openOn(map),350);
+  if(innerWidth<760) $('#aside').classList.remove('open');
+}
+document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('.tabs button').forEach(x=>x.classList.toggle('on',x===b));
+  document.querySelectorAll('.pane').forEach(p=>p.classList.toggle('on',p.id==='pane-'+b.dataset.tab)); });
+let rdeb; $('#rayon').oninput=()=>{ $('#rayonV').textContent=$('#rayon').value.replace('.',',')+' km'; clearTimeout(rdeb); rdeb=setTimeout(()=>{ focusLayer.clearLayers(); render(); },200); };
+$('#lvlMin').onchange=render; $('#showAlerts').onchange=render;
 
 let deb; $('#q').oninput=()=>{ clearTimeout(deb); deb=setTimeout(()=>{render(); if($('#q').value.length>2) fitAll();},250); };
 document.querySelectorAll('input[name=svc],#fINT,#fMAINT,#fOK').forEach(el=>el.onchange=render);
@@ -468,6 +603,7 @@ $('#reload').onclick=loadAll; $('#fit').onclick=fitAll;
 $('#toggle').onclick=()=>$('#aside').classList.toggle('open');
 
 loadAll();
+loadPostes();   // chargés en arrière-plan pour calculer les alertes
 setInterval(loadAll, AUTO_REFRESH_MIN*60*1000);
 </script>
 </body>
