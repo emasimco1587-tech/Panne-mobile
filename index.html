@@ -66,6 +66,14 @@ button:hover{border-color:var(--muted)}
 .pop .sep{border-top:1px dashed #ccc;margin:8px 0}
 .toggle{display:none}
 #toast{position:absolute;left:50%;top:12px;transform:translateX(-50%);z-index:600;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:6px 12px;box-shadow:var(--shadow);font-size:13px;display:none}
+#empty{position:absolute;inset:0;z-index:650;display:none;place-items:center;background:rgba(0,0,0,.25);padding:16px}
+#empty .box{background:var(--panel);color:var(--text);border-radius:12px;padding:18px 20px;max-width:520px;box-shadow:var(--shadow);font-size:14px}
+#empty h2{margin:0 0 8px;font-size:16px}
+#empty ol{margin:8px 0;padding-left:20px}
+#empty li{margin:4px 0}
+#empty a{color:var(--bouygues)}
+#empty .drop{margin-top:12px;border:2px dashed var(--line);border-radius:10px;padding:14px;text-align:center;color:var(--muted)}
+body.dragging #map{outline:4px dashed var(--bouygues);outline-offset:-8px}
 @media (max-width:760px){
   .main{grid-template-columns:1fr}
   aside{position:absolute;inset:auto 0 0 0;height:55%;z-index:700;border-right:0;border-top:1px solid var(--line);transform:translateY(100%);transition:transform .2s}
@@ -99,6 +107,10 @@ button:hover{border-color:var(--muted)}
           <label><input type="checkbox" id="fMAINT" checked> Maintenance</label>
           <label><input type="checkbox" id="fOK"> Sites rétablis (OK)</label>
         </div>
+        <div class="row"><span class="t">Réseau électrique</span>
+          <label><input type="checkbox" id="fPostes"> Postes électriques RTE</label>
+          <span id="postesInfo" style="color:var(--muted);font-size:12px"></span>
+        </div>
         <div class="btns">
           <button id="reload">↻ Actualiser</button>
           <button id="imp">Importer CSV…</button>
@@ -112,6 +124,19 @@ button:hover{border-color:var(--muted)}
     <div style="position:relative;min-height:0">
       <div id="map"></div>
       <div id="toast"></div>
+      <div id="empty"><div class="box">
+        <h2>Aucune donnée chargée</h2>
+        <div id="emptyWhy"></div>
+        <p><b>Solution immédiate :</b> télécharge les fichiers ci-dessous, puis glisse-les sur la carte (ou bouton « Importer CSV… »).</p>
+        <ol>
+          <li><a target="_blank" rel="noopener" href="https://couverture-mobile.orange.fr/mapV3/siteshs/data/Liste_des_antennes_provisoirement_hors_service.csv">Orange</a></li>
+          <li><a target="_blank" rel="noopener" href="https://static.s-sfr.fr/media/export-arcep/siteshorsservices.csv">SFR</a></li>
+          <li><a target="_blank" rel="noopener" href="https://mobile.free.fr/account/antennes-relais-indisponibles.csv">Free</a></li>
+          <li><a target="_blank" rel="noopener" href="https://www.bouyguestelecom.fr/static/com/assets/reseau/siteshs/downloads/antennesindisponibles.csv">Bouygues Telecom</a></li>
+        </ol>
+        <div class="drop">Dépose les fichiers .csv ici</div>
+        <p style="margin:10px 0 0"><button id="emptyClose">Fermer</button></p>
+      </div></div>
       <div class="legend">
         <span><i class="pin" style="background:#444"></i> Voix et data coupées</span>
         <span><i class="pin p" style="border-color:#444"></i> Coupure partielle / dégradé</span>
@@ -138,6 +163,11 @@ const SOURCES = [
    remote:'https://www.bouyguestelecom.fr/static/com/assets/reseau/siteshs/downloads/antennesindisponibles.csv'},
 ];
 const AUTO_REFRESH_MIN = 30;   // la page relit les fichiers toutes les 30 min
+// Postes électriques RTE — open data ODRÉ (copie locale via GitHub Action, sinon lecture directe)
+const POSTES = {
+  local:'data/postes-rte.geojson',
+  remote:'https://odre.opendatasoft.com/api/explore/v2.1/catalog/datasets/postes-electriques-rte/exports/geojson',
+};
 /* ======================================= */
 
 const $ = s => document.querySelector(s);
@@ -264,11 +294,30 @@ async function loadAll(){
   toast('Mise à jour des données…');
   try{ const r=await fetch('data/meta.json?t='+Date.now(),{cache:'no-store'}); if(r.ok) state.meta=await r.json(); }catch{}
   await Promise.all(SOURCES.map(loadSource));
-  render(); toast('');
+  render(); toast(''); showEmpty();
   const first=!loadAll.done; loadAll.done=true; if(first) fitAll();
 }
 
-/* ---------- Import manuel ---------- */
+/* ---------- Import manuel (bouton ou glisser-déposer) ---------- */
+function showEmpty(){
+  const any=SOURCES.some(s=>(state.data[s.id]||[]).length);
+  const why = location.protocol==='file:'
+    ? "<p>La page est ouverte directement depuis ton ordinateur (<code>file://</code>) : le navigateur interdit alors de lire le dossier <code>data/</code>. Ouvre-la depuis son adresse GitHub Pages (<code>https://…github.io/…</code>).</p>"
+    : "<p>Les fichiers <code>data/*.csv</code> n'existent pas encore sur le site. Dans ton dépôt GitHub : onglet <b>Actions</b> → « Mise à jour des pannes opérateurs » → <b>Run workflow</b>, attends qu'il soit vert, puis recharge la page (1 à 2 min).</p>";
+  $('#emptyWhy').innerHTML=why;
+  $('#empty').style.display = any ? 'none' : 'grid';
+}
+async function importFiles(files){
+  let n=0;
+  for(const f of files){ if(!/\.csv$|text\/csv|excel/i.test(f.name+' '+f.type)) continue;
+    const text=decode(await f.arrayBuffer()); const op=guessOp(f.name,text);
+    const sites=toSites(op,text); await geocode(sites); state.data[op]=sites; state.status[op]={ok:true,from:'import',lm:new Date(f.lastModified)}; n++; }
+  if(n){ render(); fitAll(); showEmpty(); toast(n+' fichier(s) importé(s)'); setTimeout(()=>toast(''),2500); }
+}
+$('#emptyClose').onclick=()=>$('#empty').style.display='none';
+addEventListener('dragover',e=>{e.preventDefault();document.body.classList.add('dragging');});
+addEventListener('dragleave',e=>{ if(!e.relatedTarget) document.body.classList.remove('dragging');});
+addEventListener('drop',e=>{e.preventDefault();document.body.classList.remove('dragging');importFiles(e.dataTransfer.files);});
 function guessOp(name, text){
   const n=name.toLowerCase(); const h=norm(text.slice(0,400));
   if(/orange/.test(n)||h.includes('opleader')) return 'orange';
@@ -277,11 +326,7 @@ function guessOp(name, text){
   return 'sfr';
 }
 $('#imp').onclick=()=>$('#file').click();
-$('#file').onchange=async e=>{
-  for(const f of e.target.files){ const text=decode(await f.arrayBuffer()); const op=guessOp(f.name,text);
-    const sites=toSites(op,text); await geocode(sites); state.data[op]=sites; state.status[op]={ok:true,from:'import',lm:new Date(f.lastModified)}; }
-  e.target.value=''; render(); fitAll();
-};
+$('#file').onchange=async e=>{ await importFiles(e.target.files); e.target.value=''; };
 
 /* ---------- Filtres & rendu ---------- */
 function filtered(){
@@ -352,6 +397,60 @@ function fitAll(){
   if(pts.length) map.fitBounds(pts,{padding:[20,20],maxZoom:11}); else map.setView([46.6,2.4],6);
 }
 function toast(t){ const el=$('#toast'); el.textContent=t; el.style.display=t?'block':'none'; }
+
+/* ---------- Postes électriques RTE (calque) ---------- */
+const canvasR = L.canvas({padding:.5});
+const postesLayer = L.layerGroup();
+let postesLoaded = false;
+function tensionOf(p){
+  const txt = Object.entries(p).filter(([k])=>/tension|kv|niveau/i.test(k)).map(([,v])=>String(v)).join(' ');
+  const nums = (txt.match(/\d{2,3}(?:[.,]\d)?/g)||[]).map(n=>parseFloat(n.replace(',','.'))).filter(n=>n>=20&&n<=400);
+  return nums.length ? Math.max(...nums) : null;
+}
+const tColor = t => t===null?'#8a8f98': t>=380?'#e3001b': t>=200?'#00a650': t>=130?'#1f6fd1': t>=80?'#f28c00': t>=60?'#8e44ad':'#6b7280';
+function coordOf(g){
+  if(!g) return null;
+  if(g.type==='Point') return g.coordinates;
+  const flat=[]; (function walk(a){ if(typeof a[0]==='number') flat.push(a); else a.forEach(walk); })(g.coordinates||[]);
+  if(!flat.length) return null;
+  const xs=flat.map(c=>c[0]), ys=flat.map(c=>c[1]);
+  return [(Math.min(...xs)+Math.max(...xs))/2,(Math.min(...ys)+Math.max(...ys))/2];
+}
+const findKey = (p, re) => Object.keys(p).find(k=>re.test(k));
+function postePopup(p, t){
+  const nameK = findKey(p,/^(nom|libelle|name)|nom_?poste|libelle_?poste/i);
+  const codeK = findKey(p,/^code_?poste$|^code$|^code_?site|identifiant/i);
+  const code = codeK ? String(p[codeK]).trim() : '';
+  const rows = Object.entries(p).filter(([k,v])=>v!==null&&v!==''&&typeof v!=='object'&&!/geo|shape|lat|lon/i.test(k))
+    .map(([k,v])=>`<tr><td>${esc(k.replace(/_/g,' '))}</td><td>${esc(v)}</td></tr>`).join('');
+  return `<div class="pop"><div class="op" style="color:${tColor(t)}">⚡ Poste électrique RTE</div>
+    <h3>${esc(nameK?p[nameK]:code||'Poste')}</h3>
+    <table>${rows}</table>
+    ${/^[A-Z0-9]{4,6}$/i.test(code)?`<a target="_blank" rel="noopener" href="https://app.raccordable.com/map/poste/${encodeURIComponent(code.toUpperCase())}">Voir sur Raccordable ↗</a>`:''}
+    <div class="meta" style="margin:6px 0 0">Source : RTE / ODRÉ (open data). Position publiée par RTE, précision volontairement limitée.</div></div>`;
+}
+async function loadPostes(){
+  $('#postesInfo').textContent='chargement…';
+  let gj=null;
+  for(const u of [POSTES.local+'?t='+Date.now(), POSTES.remote]){
+    try{ const r=await fetch(u,{cache:'no-store'}); if(r.ok){ gj=await r.json(); if(gj?.features?.length) break; } }catch{}
+  }
+  if(!gj?.features?.length){ $('#postesInfo').textContent='indisponible'; return false; }
+  postesLayer.clearLayers(); let n=0;
+  for(const f of gj.features){
+    const c=coordOf(f.geometry); if(!c) continue;
+    const p=f.properties||{}; const t=tensionOf(p);
+    L.circleMarker([c[1],c[0]],{renderer:canvasR,radius:t>=380?5:t>=200?4:3,color:'#fff',weight:1,fillColor:tColor(t),fillOpacity:.9})
+      .bindPopup(()=>postePopup(p,t)).addTo(postesLayer); n++;
+  }
+  postesLoaded=true;
+  $('#postesInfo').innerHTML=`${n} postes · <span style="color:#e3001b">●</span>400 <span style="color:#00a650">●</span>225 <span style="color:#f28c00">●</span>90 <span style="color:#8e44ad">●</span>63 kV`;
+  return true;
+}
+$('#fPostes').onchange=async e=>{
+  if(e.target.checked){ if(!postesLoaded && !(await loadPostes())){ e.target.checked=false; return; } postesLayer.addTo(map); postesLayer.eachLayer(l=>l.bringToBack&&l.bringToBack()); }
+  else map.removeLayer(postesLayer);
+};
 
 let deb; $('#q').oninput=()=>{ clearTimeout(deb); deb=setTimeout(()=>{render(); if($('#q').value.length>2) fitAll();},250); };
 document.querySelectorAll('input[name=svc],#fINT,#fMAINT,#fOK').forEach(el=>el.onchange=render);
