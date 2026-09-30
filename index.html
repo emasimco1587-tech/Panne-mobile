@@ -166,8 +166,11 @@ const AUTO_REFRESH_MIN = 30;   // la page relit les fichiers toutes les 30 min
 // Postes électriques haute tension — positions OpenStreetMap (RTE ne publie plus les coordonnées)
 const POSTES = {
   local:'data/postes-ht.geojson',               // copie hebdomadaire faite par la GitHub Action
-  overpass:'https://overpass-api.de/api/interpreter',
-  query:'[out:json][timeout:180];area["ISO3166-1"="FR"][admin_level=2]->.fr;nwr["power"="substation"]["voltage"~"(^|;)(63|90|150|225|400)000"](area.fr);out center tags;',
+  mirrors:['https://overpass-api.de/api/interpreter','https://overpass.private.coffee/api/interpreter',
+           'https://overpass.kumi.systems/api/interpreter','https://maps.mail.ru/osm/tools/overpass/api/interpreter'],
+  // France métropolitaine découpée en 6 zones [sud,ouest,nord,est] pour éviter les délais dépassés
+  tiles:[[41,-5.5,44.5,2],[41,2,44.5,10],[44.5,-5.5,47.5,2],[44.5,2,47.5,10],[47.5,-5.5,51.5,2],[47.5,2,51.5,10]],
+  query:b=>`[out:json][timeout:90];nwr["power"="substation"]["voltage"~"(^|;)(63|90|150|225|400)000"](${b.join(',')});out center tags;`,
 };
 /* ======================================= */
 
@@ -427,10 +430,23 @@ async function loadPostes(){
   let gj=null;
   try{ const r=await fetch(POSTES.local+'?t='+Date.now(),{cache:'no-store'}); if(r.ok) gj=await r.json(); }catch{}
   if(!gj?.features?.length){
-    info.textContent='chargement depuis OpenStreetMap (≈30 s)…';
-    try{ const r=await fetch(POSTES.overpass,{method:'POST',body:'data='+encodeURIComponent(POSTES.query),headers:{'Content-Type':'application/x-www-form-urlencoded'}});
-      if(!r.ok) throw new Error('HTTP '+r.status); gj=osmToGeoJSON(await r.json()); }
-    catch(e){ info.textContent='indisponible ('+(e.message||'erreur')+'), réessaie dans 1 min'; return false; }
+    const seen=new Set(), feats=[]; let ok=0;
+    for(const [i,t] of POSTES.tiles.entries()){
+      info.textContent=`chargement OpenStreetMap… zone ${i+1}/${POSTES.tiles.length}`;
+      let done=false;
+      for(const m of POSTES.mirrors){
+        try{
+          const ctl=new AbortController(); const to=setTimeout(()=>ctl.abort(),100000);
+          const r=await fetch(m,{method:'POST',signal:ctl.signal,body:'data='+encodeURIComponent(POSTES.query(t)),headers:{'Content-Type':'application/x-www-form-urlencoded'}});
+          clearTimeout(to); if(!r.ok) continue;
+          for(const f of osmToGeoJSON(await r.json()).features){ if(!seen.has(f.properties.osm)){ seen.add(f.properties.osm); feats.push(f); } }
+          done=true; ok++; break;
+        }catch{}
+      }
+      if(!done) console.warn('Zone postes non chargée',t);
+    }
+    if(!feats.length){ info.textContent='indisponible (serveurs OpenStreetMap saturés), réessaie dans quelques minutes'; return false; }
+    gj={features:feats}; if(ok<POSTES.tiles.length) setTimeout(()=>info.insertAdjacentText('beforeend',` · ${POSTES.tiles.length-ok} zone(s) manquante(s)`),0);
   }
   postesLayer.clearLayers(); let n=0;
   for(const f of gj.features){ const c=f.geometry?.coordinates; if(!c) continue;
