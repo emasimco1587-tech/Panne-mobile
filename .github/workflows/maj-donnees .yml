@@ -1,0 +1,74 @@
+name: Mise à jour des pannes opérateurs
+
+on:
+  schedule:
+    # Toutes les 3 heures (heure UTC) : les opérateurs publient ~2 fois/jour,
+    # on passe plus souvent pour récupérer chaque mise à jour rapidement.
+    - cron: "17 */3 * * *"
+  workflow_dispatch: {}   # bouton "Run workflow" pour lancer à la main
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Télécharger les 4 fichiers CSV
+        run: |
+          mkdir -p data
+          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
+          get() {
+            # $1 = nom local, $2 = URL. En cas d'échec on garde l'ancien fichier.
+            if curl -fsSL --retry 3 --retry-delay 10 -m 60 -A "$UA" -o "data/$1.tmp" "$2" && [ -s "data/$1.tmp" ]; then
+              mv "data/$1.tmp" "data/$1.csv"; echo "\"$1\":true"
+            else
+              rm -f "data/$1.tmp"; echo "::warning::Échec téléchargement $1"; echo "\"$1\":false"
+            fi
+          }
+          R1=$(get orange   "https://couverture-mobile.orange.fr/mapV3/siteshs/data/Liste_des_antennes_provisoirement_hors_service.csv" | tail -1)
+          R2=$(get sfr      "https://static.s-sfr.fr/media/export-arcep/siteshorsservices.csv" | tail -1)
+          R3=$(get free     "https://mobile.free.fr/account/antennes-relais-indisponibles.csv" | tail -1)
+          R4=$(get bouygues "https://www.bouyguestelecom.fr/static/com/assets/reseau/siteshs/downloads/antennesindisponibles.csv" | tail -1)
+          echo "{\"updated\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"sources\":{$R1,$R2,$R3,$R4}}" > data/meta.json
+          cat data/meta.json
+
+      - name: Postes électriques HT (OpenStreetMap, 1 fois par semaine)
+        continue-on-error: true
+        run: |
+          F=data/postes-ht.geojson
+          T=$(git log -1 --format=%ct -- "$F" 2>/dev/null); T=${T:-0}
+          if [ -f "$F" ] && [ $(( $(date +%s) - T )) -lt 604800 ]; then
+            echo "Postes à jour (moins de 7 jours)."; exit 0
+          fi
+          Q='[out:json][timeout:180];area["ISO3166-1"="FR"][admin_level=2]->.fr;nwr["power"="substation"]["voltage"~"(^|;)(63|90|150|225|400)000"](area.fr);out center tags;'
+          curl -fsSL --retry 3 -m 300 --data-urlencode "data=$Q" https://overpass-api.de/api/interpreter -o osm.json
+          python3 - <<'PY'
+          import json
+          j=json.load(open('osm.json')); feats=[]
+          for e in j.get('elements',[]):
+              lat=e.get('lat', e.get('center',{}).get('lat')); lon=e.get('lon', e.get('center',{}).get('lon'))
+              if lat is None: continue
+              t=dict(e.get('tags',{})); t['osm']=f"{e['type']}/{e['id']}"
+              feats.append({'type':'Feature','geometry':{'type':'Point','coordinates':[round(lon,5),round(lat,5)]},'properties':t})
+          if len(feats)>500:
+              json.dump({'type':'FeatureCollection','features':feats},open('data/postes-ht.geojson','w'),ensure_ascii=False,separators=(',',':'))
+          print(len(feats),'postes')
+          PY
+          rm -f osm.json
+
+      - name: Enregistrer si les données ont changé
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A data
+          if git diff --cached --quiet -- ':!data/meta.json'; then
+            echo "Aucun changement dans les données."
+          else
+            git commit -m "Données pannes : $(date -u +'%Y-%m-%d %H:%M') UTC"
+            git push
+          fi
