@@ -430,21 +430,56 @@ function postePopup(p, t){
     <div class="meta" style="margin:6px 0 0">Source : RTE / ODRÉ (open data). Position publiée par RTE, précision volontairement limitée.</div></div>`;
 }
 async function loadPostes(){
-  $('#postesInfo').textContent='chargement…';
-  let gj=null;
-  for(const u of [POSTES.local+'?t='+Date.now(), POSTES.remote]){
-    try{ const r=await fetch(u,{cache:'no-store'}); if(r.ok){ gj=await r.json(); if(gj?.features?.length) break; } }catch{}
+  const info=$('#postesInfo'); info.textContent='chargement…';
+  let feats=null, errs=[];
+  const tries=[
+    [POSTES.local+'?t='+Date.now(),'geojson'],
+    [POSTES.remote,'geojson'],
+    [POSTES.remote.replace('/exports/geojson','/exports/json'),'json'],
+  ];
+  for(const [u,kind] of tries){
+    try{
+      const r=await fetch(u,{cache:'no-store'});
+      if(!r.ok){ errs.push(`${kind} HTTP ${r.status}`); continue; }
+      const j=await r.json();
+      const f = kind==='geojson' ? (j.features||[]) : (Array.isArray(j)?j:[]).map(p=>({geometry:null,properties:p}));
+      if(f.length){ feats=f; break; } errs.push(kind+' vide');
+    }catch(e){ errs.push(kind+' '+(e.message||'erreur')); }
   }
-  if(!gj?.features?.length){ $('#postesInfo').textContent='indisponible'; return false; }
+  if(!feats){ info.textContent='indisponible ('+errs.join(' · ')+')'; console.warn('Postes RTE',errs); return false; }
+
+  // position : géométrie > champs lat/lon > centre de la commune (code INSEE ou nom)
+  const pts=[]; const needCommune=[];
+  for(const f of feats){
+    const p={...(f.properties||{})};
+    let c=coordOf(f.geometry);
+    if(!c){ for(const v of Object.values(p)){ if(v&&typeof v==='object'&&isFinite(v.lat)&&isFinite(v.lon)){ c=[+v.lon,+v.lat]; break; }
+        if(v&&typeof v==='object'&&v.type&&v.coordinates){ c=coordOf(v); if(c) break; } } }
+    if(!c){ const la=findKey(p,/^(lat|latitude)$/i), lo=findKey(p,/^(lon|lng|long|longitude)$/i);
+      if(la&&lo&&isFinite(num(p[la]))&&isFinite(num(p[lo]))) c=[num(p[lo]),num(p[la])]; }
+    const item={p,c,t:tensionOf(p)}; pts.push(item); if(!c) needCommune.push(item);
+  }
+  let approx=0;
+  if(needCommune.length){
+    info.textContent='positionnement par commune…';
+    try{
+      const r=await fetch('https://geo.api.gouv.fr/communes?fields=nom,code,centre,codeDepartement&format=json');
+      const com=await r.json(); const byCode={}, byName={};
+      for(const x of com){ if(!x.centre) continue; byCode[x.code]=x.centre.coordinates; byName[norm(x.nom)+'|'+x.codeDepartement]=x.centre.coordinates; byName[norm(x.nom)]??=x.centre.coordinates; }
+      for(const it of needCommune){ const p=it.p;
+        const ik=findKey(p,/insee|code_?commune/i); const nk=findKey(p,/^commune|nom_?commune|libelle_?commune/i); const dk=findKey(p,/departement|dept/i);
+        const code=ik?String(p[ik]).padStart(5,'0'):''; const nom=nk?norm(String(p[nk])):''; const dep=dk?String(p[dk]).match(/\d{2,3}|2[AB]/i)?.[0]:'';
+        const c=byCode[code]||(nom&&(byName[nom+'|'+dep]||byName[nom]));
+        if(c){ it.c=c; it.approx=true; approx++; } }
+    }catch(e){ console.warn('geo.api',e); }
+  }
   postesLayer.clearLayers(); let n=0;
-  for(const f of gj.features){
-    const c=coordOf(f.geometry); if(!c) continue;
-    const p=f.properties||{}; const t=tensionOf(p);
-    L.circleMarker([c[1],c[0]],{renderer:canvasR,radius:t>=380?5:t>=200?4:3,color:'#fff',weight:1,fillColor:tColor(t),fillOpacity:.9})
-      .bindPopup(()=>postePopup(p,t)).addTo(postesLayer); n++;
-  }
-  postesLoaded=true;
-  $('#postesInfo').innerHTML=`${n} postes · <span style="color:#e3001b">●</span>400 <span style="color:#00a650">●</span>225 <span style="color:#f28c00">●</span>90 <span style="color:#8e44ad">●</span>63 kV`;
+  for(const {p,c,t,approx:ap} of pts){ if(!c) continue;
+    L.circleMarker([c[1],c[0]],{renderer:canvasR,radius:t>=380?5:t>=200?4:3,color:'#fff',weight:1,fillColor:tColor(t),fillOpacity:.9,dashArray:ap?'2 2':null})
+      .bindPopup(()=>postePopup(p,t)+(ap?'<div class="meta">📍 Position approximative : centre de la commune.</div>':'')).addTo(postesLayer); n++; }
+  postesLoaded=n>0;
+  if(!n){ info.textContent=`${pts.length} postes trouvés mais aucune position exploitable`; console.warn('Exemple poste RTE',pts[0]?.p); return false; }
+  info.innerHTML=`${n}/${pts.length} postes${approx?` (dont ${approx} au centre de la commune)`:''} · <span style="color:#e3001b">●</span>400 <span style="color:#00a650">●</span>225 <span style="color:#f28c00">●</span>90 <span style="color:#8e44ad">●</span>63 kV`;
   return true;
 }
 $('#fPostes').onchange=async e=>{
