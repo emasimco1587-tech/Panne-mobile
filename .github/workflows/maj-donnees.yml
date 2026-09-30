@@ -1,0 +1,46 @@
+name: Mise à jour des pannes opérateurs
+
+on:
+  schedule:
+    - cron: "17 */3 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Télécharger les 4 fichiers CSV
+        run: |
+          mkdir -p data
+          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
+          get() {
+            if curl -fsSL --retry 3 --retry-delay 10 -m 60 -A "$UA" -o "data/$1.tmp" "$2" && [ -s "data/$1.tmp" ]; then
+              mv "data/$1.tmp" "data/$1.csv"; echo "\"$1\":true"
+            else
+              rm -f "data/$1.tmp"; echo "::warning::Échec téléchargement $1"; echo "\"$1\":false"
+            fi
+          }
+          R1=$(get orange   "https://couverture-mobile.orange.fr/mapV3/siteshs/data/Liste_des_antennes_provisoirement_hors_service.csv" | tail -1)
+          R2=$(get sfr      "https://static.s-sfr.fr/media/export-arcep/siteshorsservices.csv" | tail -1)
+          R3=$(get free     "https://mobile.free.fr/account/antennes-relais-indisponibles.csv" | tail -1)
+          R4=$(get bouygues "https://www.bouyguestelecom.fr/static/com/assets/reseau/siteshs/downloads/antennesindisponibles.csv" | tail -1)
+          echo "{\"updated\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"sources\":{$R1,$R2,$R3,$R4}}" > data/meta.json
+          cat data/meta.json
+
+      - name: Enregistrer si les données ont changé
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/*.csv
+          if git diff --cached --quiet; then
+            echo "Aucun changement."
+          else
+            git add data/meta.json
+            git commit -m "Données pannes : $(date -u +'%Y-%m-%d %H:%M') UTC"
+            git push
+          fi
