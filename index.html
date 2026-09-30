@@ -1,0 +1,359 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Pannes réseaux mobiles</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/MarkerCluster.min.css">
+<style>
+:root{
+  --bg:#f6f7f9;--panel:#ffffff;--text:#15181d;--muted:#5f6772;--line:#e3e6ea;--chip:#eef0f3;
+  --orange:#ff7900;--sfr:#e2001a;--free:#6b7280;--bouygues:#0095c8;
+  --shadow:0 2px 12px rgba(0,0,0,.08);
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#111418;--panel:#1a1e24;--text:#e8eaed;--muted:#9aa3ad;--line:#2b3139;--chip:#252a31;--free:#a3a9b3;
+  --shadow:0 2px 12px rgba(0,0,0,.4);
+}}
+:root[data-theme="dark"]{--bg:#111418;--panel:#1a1e24;--text:#e8eaed;--muted:#9aa3ad;--line:#2b3139;--chip:#252a31;--free:#a3a9b3;--shadow:0 2px 12px rgba(0,0,0,.4)}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font:14px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.app{display:grid;grid-template-rows:auto 1fr;height:100dvh}
+header{display:flex;flex-wrap:wrap;align-items:center;gap:10px 16px;padding:10px 16px;background:var(--panel);border-bottom:1px solid var(--line);z-index:1000}
+header h1{font-size:16px;margin:0;font-weight:650;letter-spacing:-.01em}
+.upd{color:var(--muted);font-size:12px}
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin-left:auto}
+.chip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:var(--chip);color:var(--text);border-radius:999px;padding:4px 10px;font-size:13px;cursor:pointer;user-select:none}
+.chip .dot{width:10px;height:10px;border-radius:50%}
+.chip b{font-variant-numeric:tabular-nums}
+.chip.off{opacity:.4}
+.chip.err{border-color:#d33}
+.main{position:relative;display:grid;grid-template-columns:320px 1fr;min-height:0}
+aside{background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
+.filters{padding:12px 14px;border-bottom:1px solid var(--line);display:grid;gap:10px}
+.filters input[type=search]{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text);font:inherit}
+.row{display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center;font-size:13px}
+.row label{display:inline-flex;gap:5px;align-items:center;cursor:pointer}
+.row .t{color:var(--muted);font-size:12px;width:100%}
+.btns{display:flex;gap:6px}
+button{font:inherit;font-size:13px;padding:6px 10px;border-radius:8px;border:1px solid var(--line);background:var(--chip);color:var(--text);cursor:pointer}
+button:hover{border-color:var(--muted)}
+.count{padding:8px 14px;color:var(--muted);font-size:12px;border-bottom:1px solid var(--line)}
+.list{overflow:auto;flex:1;min-height:0}
+.item{padding:8px 14px;border-bottom:1px solid var(--line);cursor:pointer;display:grid;grid-template-columns:10px 1fr auto;gap:2px 8px;align-items:center}
+.item:hover{background:var(--chip)}
+.item .d{width:10px;height:10px;border-radius:50%}
+.item .d.p{background:transparent!important;border:2.5px solid}
+.item .c{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.item .s{grid-column:2/4;color:var(--muted);font-size:12px}
+.item .a{color:var(--muted);font-size:12px;white-space:nowrap}
+#map{height:100%;width:100%;background:var(--bg)}
+.legend{position:absolute;right:12px;bottom:24px;z-index:500;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:8px 10px;box-shadow:var(--shadow);font-size:12px;display:grid;gap:4px}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.pin{width:14px;height:14px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.35)}
+.pin.p{background:#fff!important;border-width:4px;box-shadow:0 0 0 1px rgba(0,0,0,.35)}
+.pin.m{border-radius:3px}
+.clu{background:rgba(20,24,30,.82);color:#fff;border-radius:50%;display:grid;place-items:center;font-weight:700;font-size:12px;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4)}
+.leaflet-popup-content{margin:10px 12px;font-size:13px;min-width:220px}
+.pop h3{margin:0 0 2px;font-size:14px}
+.pop .op{font-weight:700}
+.pop .meta{color:#666;font-size:12px;margin-bottom:6px}
+.pop table{border-collapse:collapse;width:100%;margin:4px 0 6px}
+.pop td{padding:2px 4px;border-bottom:1px solid #eee;font-size:12px}
+.st{font-weight:700;border-radius:4px;padding:0 5px;font-size:11px}
+.st.HS{background:#fde2e1;color:#b3261e}.st.OK{background:#dcf5e3;color:#1c7a3d}.st.DE{background:#fff1d6;color:#8a5a00}.st.NE{color:#999}
+.pop .sep{border-top:1px dashed #ccc;margin:8px 0}
+.toggle{display:none}
+#toast{position:absolute;left:50%;top:12px;transform:translateX(-50%);z-index:600;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:6px 12px;box-shadow:var(--shadow);font-size:13px;display:none}
+@media (max-width:760px){
+  .main{grid-template-columns:1fr}
+  aside{position:absolute;inset:auto 0 0 0;height:55%;z-index:700;border-right:0;border-top:1px solid var(--line);transform:translateY(100%);transition:transform .2s}
+  aside.open{transform:none}
+  .toggle{display:inline-block}
+  .chips{margin-left:0}
+  .legend{bottom:12px;right:8px}
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1>Pannes réseaux mobiles</h1>
+    <span class="upd" id="upd">Chargement…</span>
+    <button class="toggle" id="toggle">Filtres &amp; liste</button>
+    <div class="chips" id="chips"></div>
+  </header>
+  <div class="main">
+    <aside id="aside">
+      <div class="filters">
+        <input type="search" id="q" placeholder="Commune, département, code site…">
+        <div class="row"><span class="t">Service coupé</span>
+          <label><input type="radio" name="svc" value="all" checked> Tous</label>
+          <label><input type="radio" name="svc" value="voix"> Voix</label>
+          <label><input type="radio" name="svc" value="data"> Data</label>
+          <label><input type="radio" name="svc" value="total"> Voix + data</label>
+        </div>
+        <div class="row"><span class="t">Raison</span>
+          <label><input type="checkbox" id="fINT" checked> Incident</label>
+          <label><input type="checkbox" id="fMAINT" checked> Maintenance</label>
+          <label><input type="checkbox" id="fOK"> Sites rétablis (OK)</label>
+        </div>
+        <div class="btns">
+          <button id="reload">↻ Actualiser</button>
+          <button id="imp">Importer CSV…</button>
+          <button id="fit">Recentrer</button>
+          <input type="file" id="file" accept=".csv,text/csv" multiple hidden>
+        </div>
+      </div>
+      <div class="count" id="count"></div>
+      <div class="list" id="list"></div>
+    </aside>
+    <div style="position:relative;min-height:0">
+      <div id="map"></div>
+      <div id="toast"></div>
+      <div class="legend">
+        <span><i class="pin" style="background:#444"></i> Voix et data coupées</span>
+        <span><i class="pin p" style="border-color:#444"></i> Coupure partielle / dégradé</span>
+        <span><i class="pin m" style="background:#444"></i> Carré = maintenance programmée</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/leaflet.markercluster.min.js"></script>
+<script>
+/* ============ CONFIGURATION ============ */
+// "local" = copie mise à jour automatiquement par la GitHub Action (dossier data/)
+// "remote" = lien officiel de l'opérateur (utilisé en secours si la copie locale est absente)
+const SOURCES = [
+  {id:'orange',   name:'Orange',   cssVar:'--orange',   local:'data/orange.csv',
+   remote:'https://couverture-mobile.orange.fr/mapV3/siteshs/data/Liste_des_antennes_provisoirement_hors_service.csv'},
+  {id:'sfr',      name:'SFR',      cssVar:'--sfr',      local:'data/sfr.csv',
+   remote:'https://static.s-sfr.fr/media/export-arcep/siteshorsservices.csv'},
+  {id:'free',     name:'Free',     cssVar:'--free',     local:'data/free.csv',
+   remote:'https://mobile.free.fr/account/antennes-relais-indisponibles.csv'},
+  {id:'bouygues', name:'Bouygues', cssVar:'--bouygues', local:'data/bouygues.csv',
+   remote:'https://www.bouyguestelecom.fr/static/com/assets/reseau/siteshs/downloads/antennesindisponibles.csv'},
+];
+const AUTO_REFRESH_MIN = 30;   // la page relit les fichiers toutes les 30 min
+/* ======================================= */
+
+const $ = s => document.querySelector(s);
+const color = id => getComputedStyle(document.documentElement).getPropertyValue(SOURCES.find(s=>s.id===id).cssVar).trim();
+const state = { data:{}, status:{}, off:new Set(), meta:null };
+
+/* ---------- Carte ---------- */
+const map = L.map('map',{preferCanvas:false,zoomControl:true}).setView([46.6,2.4],6);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',{
+  maxZoom:19,subdomains:'abcd',
+  attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a> — Données : opérateurs (obligation Arcep)'
+}).addTo(map);
+const cluster = L.markerClusterGroup({
+  maxClusterRadius:40, disableClusteringAtZoom:10, showCoverageOnHover:false, chunkedLoading:true,
+  iconCreateFunction:c=>{const n=c.getChildCount();const s=n<10?28:n<100?34:42;
+    return L.divIcon({html:`<div class="clu" style="width:${s}px;height:${s}px">${n}</div>`,className:'',iconSize:[s,s]});}
+}).addTo(map);
+
+/* ---------- CSV ---------- */
+function decode(buf){
+  let t = new TextDecoder('utf-8').decode(buf);
+  if (t.includes('�')) t = new TextDecoder('windows-1252').decode(buf);
+  return t.replace(/^﻿/,'');
+}
+function parseCSV(text){
+  const first = text.slice(0, text.indexOf('\n')>0?text.indexOf('\n'):text.length);
+  const delim = (first.split(';').length >= first.split(',').length) ? ';' : ',';
+  const rows=[]; let row=[], f='', q=false;
+  for (let i=0;i<text.length;i++){
+    const ch=text[i];
+    if (q){ if(ch==='"'){ if(text[i+1]==='"'){f+='"';i++;} else q=false; } else f+=ch; }
+    else if (ch==='"') q=true;
+    else if (ch===delim){ row.push(f); f=''; }
+    else if (ch==='\n'){ row.push(f); rows.push(row); row=[]; f=''; }
+    else if (ch!=='\r') f+=ch;
+  }
+  if (f!=='' || row.length){ row.push(f); rows.push(row); }
+  return rows.filter(r=>r.some(c=>c.trim()!==''));
+}
+const norm = s => s.normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase().replace(/[^a-z0-9]/g,'');
+function pick(o, ...keys){ for(const k of keys){ if(o[k]!==undefined && String(o[k]).trim()!=='') return String(o[k]).trim(); } return ''; }
+const num = s => { const v=parseFloat(String(s).trim().replace(/\s/g,'').replace(',','.')); return isFinite(v)?v:NaN; };
+function parseDate(s){
+  if(!s) return null; s=s.trim(); let m;
+  if ((m=s.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}))?/))) return new Date(+m[1],m[2]-1,+m[3],+(m[4]||0),+(m[5]||0));
+  if ((m=s.match(/^(\d{2})\/(\d{2})\/(\d{4})(?:\s+(\d{2}):(\d{2}))?/))) return new Date(+m[3],m[2]-1,+m[1],+(m[4]||0),+(m[5]||0));
+  return null;
+}
+const fmt = d => d ? d.toLocaleDateString('fr-FR')+(d.getHours()||d.getMinutes()?' '+d.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'}):'') : '—';
+const st = v => { v=(v||'').toUpperCase().trim(); return ['HS','OK','DE','NE'].includes(v)?v:''; };
+
+function toSites(opId, text){
+  const rows=parseCSV(text); if(rows.length<2) return [];
+  const H=rows[0].map(norm);
+  const out=[];
+  for(const r of rows.slice(1)){
+    const o={}; H.forEach((h,i)=>o[h]=r[i]??'');
+    const s = {
+      op:opId,
+      code: pick(o,'codesiteop','codesi','codesite','idsite','code'),
+      commune: pick(o,'commune','libellecommune','nomcommune').replace(/\s+/g,' ').trim(),
+      dep: pick(o,'departement','dept','nomdepartement'),
+      region: pick(o,'region'),
+      insee: pick(o,'codeinsee','insee'),
+      lat: num(pick(o,'lat','latitude','y')), lon: num(pick(o,'lon','lng','long','longitude','x')),
+      svc:{'2G voix':st(o['2gvoix']),'3G voix':st(o['3gvoix']),'3G data':st(o['3gdata']),'4G data':st(o['4gdata']),'5G data':st(o['5gdata'])},
+      voix: st(o.voix), data: st(o.data),
+      raison: pick(o,'raison').toUpperCase(),
+      detail: pick(o,'detail','commentaire'),
+    };
+    const debs=[pick(o,'debut','debutinterruptionvoix'),pick(o,'debutinterruptiondata')].map(parseDate).filter(Boolean);
+    const fins=[pick(o,'finprev','fin','finprevue','fininterruptionvoix'),pick(o,'fininterruptiondata')].map(parseDate).filter(Boolean);
+    s.debut = debs.length?new Date(Math.min(...debs)):null;
+    s.fin   = fins.length?new Date(Math.max(...fins)):null;
+    if(!(Math.abs(s.lat)<=90 && Math.abs(s.lon)<=180)) { s.lat=NaN; s.lon=NaN; }
+    const all=[...Object.values(s.svc),s.voix,s.data];
+    const vHS = s.voix==='HS' || (!s.voix && ['2G voix','3G voix'].some(k=>s.svc[k]==='HS'));
+    const dHS = s.data==='HS' || (!s.data && ['3G data','4G data','5G data'].every(k=>['HS','NE',''].includes(s.svc[k])) && Object.values(s.svc).some(v=>v==='HS'));
+    s.vHS=vHS; s.dHS=dHS;
+    s.level = (vHS&&dHS)?'total' : all.some(v=>v==='HS'||v==='DE') ? 'partiel' : 'ok';
+    out.push(s);
+  }
+  // regroupe les lignes du même site (ex. incident + maintenance)
+  const by=new Map();
+  for(const s of out){ const k=s.code||(s.lat+','+s.lon); if(!by.has(k)) by.set(k,{...s,entries:[s]}); else { const g=by.get(k); g.entries.push(s);
+      if(s.level==='total'||(s.level==='partiel'&&g.level==='ok')) g.level=s.level; g.vHS=g.vHS||s.vHS; g.dHS=g.dHS||s.dHS;
+      if(s.debut && (!g.debut||s.debut<g.debut)) g.debut=s.debut; if(g.raison!==s.raison) g.raison=g.raison+'/'+s.raison; } }
+  return [...by.values()];
+}
+
+/* ---------- Géocodage de secours (si un fichier n'a pas de coordonnées) ---------- */
+const geoCache={};
+async function geocode(sites){
+  const todo=[...new Set(sites.filter(s=>isNaN(s.lat)&&s.insee).map(s=>s.insee.padStart(5,'0')))].filter(c=>!(c in geoCache));
+  for(let i=0;i<todo.length;i+=8){
+    await Promise.all(todo.slice(i,i+8).map(async c=>{
+      try{ const r=await fetch(`https://geo.api.gouv.fr/communes/${c}?fields=centre`); const j=await r.json();
+        geoCache[c]=j.centre?.coordinates||null; }catch{ geoCache[c]=null; }
+    }));
+  }
+  for(const s of sites) if(isNaN(s.lat)&&s.insee){ const c=geoCache[s.insee.padStart(5,'0')]; if(c){ s.lon=c[0]; s.lat=c[1]; s.approx=true; } }
+}
+
+/* ---------- Chargement ---------- */
+async function fetchBuf(url){ const r=await fetch(url,{cache:'no-store'}); if(!r.ok) throw new Error('HTTP '+r.status); return {buf:await r.arrayBuffer(), lm:r.headers.get('last-modified')}; }
+async function loadSource(src){
+  const t='?t='+Date.now();
+  let res=null, from='';
+  try{ res=await fetchBuf(src.local+t); from='local'; }catch{}
+  if(!res){ try{ res=await fetchBuf(src.remote); from='direct'; }catch(e){} }
+  if(!res){ state.status[src.id]={ok:false,msg:'Fichier introuvable'}; return; }
+  const sites=toSites(src.id, decode(res.buf));
+  await geocode(sites);
+  state.data[src.id]=sites;
+  state.status[src.id]={ok:true,from,lm:res.lm?new Date(res.lm):null};
+}
+async function loadAll(){
+  toast('Mise à jour des données…');
+  try{ const r=await fetch('data/meta.json?t='+Date.now(),{cache:'no-store'}); if(r.ok) state.meta=await r.json(); }catch{}
+  await Promise.all(SOURCES.map(loadSource));
+  render(); toast('');
+  const first=!loadAll.done; loadAll.done=true; if(first) fitAll();
+}
+
+/* ---------- Import manuel ---------- */
+function guessOp(name, text){
+  const n=name.toLowerCase(); const h=norm(text.slice(0,400));
+  if(/orange/.test(n)||h.includes('opleader')) return 'orange';
+  if(/bouygues|antennesindisponibles/.test(n)||h.includes('codesi')&&!h.includes('codesiteop')) return 'bouygues';
+  if(/free|antennes-relais/.test(n)||h.includes('finprev')) return 'free';
+  return 'sfr';
+}
+$('#imp').onclick=()=>$('#file').click();
+$('#file').onchange=async e=>{
+  for(const f of e.target.files){ const text=decode(await f.arrayBuffer()); const op=guessOp(f.name,text);
+    const sites=toSites(op,text); await geocode(sites); state.data[op]=sites; state.status[op]={ok:true,from:'import',lm:new Date(f.lastModified)}; }
+  e.target.value=''; render(); fitAll();
+};
+
+/* ---------- Filtres & rendu ---------- */
+function filtered(){
+  const q=norm($('#q').value); const svc=document.querySelector('input[name=svc]:checked').value;
+  const showOK=$('#fOK').checked, INT=$('#fINT').checked, MAINT=$('#fMAINT').checked;
+  const res=[];
+  for(const src of SOURCES){ if(state.off.has(src.id)) continue;
+    for(const s of state.data[src.id]||[]){
+      if(isNaN(s.lat)) continue;
+      if(s.level==='ok' && !showOK) continue;
+      const isM=s.raison.includes('MAINT'), isI=!isM||s.raison.includes('INT');
+      if(!((isI&&INT)||(isM&&MAINT))) continue;
+      if(svc==='voix'&&!s.vHS) continue; if(svc==='data'&&!s.dHS) continue; if(svc==='total'&&s.level!=='total') continue;
+      if(q && !norm(`${s.commune} ${s.dep} ${s.code} ${s.insee} ${s.region}`).includes(q)) continue;
+      res.push(s);
+    }}
+  return res;
+}
+const esc = s => String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function popup(s){
+  const src=SOURCES.find(x=>x.id===s.op);
+  const block=e=>`<table>${Object.entries(e.svc).filter(([,v])=>v).map(([k,v])=>`<tr><td>${k}</td><td><span class="st ${v}">${v}</span></td></tr>`).join('')}
+    ${e.voix?`<tr><td><b>Voix</b></td><td><span class="st ${e.voix}">${e.voix}</span></td></tr>`:''}${e.data?`<tr><td><b>Data</b></td><td><span class="st ${e.data}">${e.data}</span></td></tr>`:''}</table>
+    <div>${e.raison==='MAINT'?'🔧 Maintenance programmée':e.raison==='INT'?'⚠️ Incident':esc(e.raison)}${e.detail?' — '+esc(e.detail):''}</div>
+    <div>Depuis : <b>${fmt(e.debut)}</b> · Fin prévue : <b>${fmt(e.fin)}</b></div>`;
+  return `<div class="pop"><div class="op" style="color:${color(s.op)}">${src.name}</div><h3>${esc(s.commune||'—')}</h3>
+    <div class="meta">${esc(s.dep)}${s.region?' · '+esc(s.region):''} · site ${esc(s.code)}${s.approx?' · <i>position approx. (centre commune)</i>':''}</div>
+    ${s.entries.map(block).join('<div class="sep"></div>')}
+    <div class="meta" style="margin:6px 0 0">HS = hors service · DE = dégradé · NE = non équipé</div></div>`;
+}
+function icon(s){
+  const c=color(s.op); const m=s.raison.includes('MAINT')&&!s.raison.includes('INT');
+  const cls = s.level==='total'?'':' p';
+  const style = s.level==='total'?`background:${c}`:`border-color:${c}`;
+  return L.divIcon({className:'',html:`<i class="pin${cls}${m?' m':''}" style="${style};display:block"></i>`,iconSize:[14,14],iconAnchor:[7,7],popupAnchor:[0,-7]});
+}
+const days = d => d?Math.max(0,Math.floor((Date.now()-d)/864e5)):null;
+function render(){
+  // pastilles opérateurs
+  $('#chips').innerHTML = SOURCES.map(src=>{ const all=(state.data[src.id]||[]).filter(s=>s.level!=='ok'); const ok=state.status[src.id]?.ok;
+    return `<span class="chip ${state.off.has(src.id)?'off':''} ${ok===false?'err':''}" data-id="${src.id}" title="${ok===false?'Données indisponibles':'Cliquer pour afficher/masquer'}">
+      <i class="dot" style="background:${color(src.id)}"></i>${src.name} <b>${ok===false?'✕':all.length}</b></span>`; }).join('');
+  document.querySelectorAll('.chip').forEach(el=>el.onclick=()=>{ const id=el.dataset.id; state.off.has(id)?state.off.delete(id):state.off.add(id); render(); });
+  // date de mise à jour
+  const dates=Object.values(state.status).map(s=>s.lm).filter(Boolean);
+  const upd = state.meta?.updated ? new Date(state.meta.updated) : (dates.length?new Date(Math.max(...dates)):null);
+  const errs=SOURCES.filter(s=>state.status[s.id]?.ok===false).map(s=>s.name);
+  $('#upd').textContent = (upd?'Données du '+fmt(upd):'Date inconnue') + (errs.length?' · indisponible : '+errs.join(', '):'');
+  // marqueurs
+  const list=filtered();
+  cluster.clearLayers();
+  const markers=list.map(s=>{ const m=L.marker([s.lat,s.lon],{icon:icon(s)}).bindPopup(()=>popup(s)); s._m=m; return m; });
+  cluster.addLayers(markers);
+  // liste
+  const tot=list.filter(s=>s.level==='total').length;
+  $('#count').textContent=`${list.length} site(s) affiché(s) · ${tot} sans voix ni data`;
+  const sorted=[...list].sort((a,b)=>(b.debut||0)-(a.debut||0)).slice(0,500);
+  $('#list').innerHTML=sorted.map((s,i)=>{ const d=days(s.debut);
+    return `<div class="item" data-i="${i}"><i class="d ${s.level==='total'?'':'p'}" style="${s.level==='total'?'background':'border-color'}:${color(s.op)}"></i>
+      <span class="c">${esc(s.commune||'—')}</span><span class="a">${d===null?'':d===0?"aujourd'hui":d+' j'}</span>
+      <span class="s">${SOURCES.find(x=>x.id===s.op).name} · ${esc(s.dep)} · ${s.vHS&&s.dHS?'voix + data':s.vHS?'voix':s.dHS?'data':'dégradé'}${s.raison.includes('MAINT')?' · maintenance':''}</span></div>`; }).join('')
+    + (list.length>500?`<div class="count">… liste limitée aux 500 plus récents</div>`:'');
+  document.querySelectorAll('.item').forEach(el=>el.onclick=()=>{ const s=sorted[+el.dataset.i];
+    cluster.zoomToShowLayer(s._m,()=>s._m.openPopup()); if(innerWidth<760) $('#aside').classList.remove('open'); });
+}
+function fitAll(){
+  const pts=filtered().filter(s=>s.lat>41&&s.lat<51.5&&s.lon>-5.5&&s.lon<10).map(s=>[s.lat,s.lon]);
+  if(pts.length) map.fitBounds(pts,{padding:[20,20],maxZoom:11}); else map.setView([46.6,2.4],6);
+}
+function toast(t){ const el=$('#toast'); el.textContent=t; el.style.display=t?'block':'none'; }
+
+let deb; $('#q').oninput=()=>{ clearTimeout(deb); deb=setTimeout(()=>{render(); if($('#q').value.length>2) fitAll();},250); };
+document.querySelectorAll('input[name=svc],#fINT,#fMAINT,#fOK').forEach(el=>el.onchange=render);
+$('#reload').onclick=loadAll; $('#fit').onclick=fitAll;
+$('#toggle').onclick=()=>$('#aside').classList.toggle('open');
+
+loadAll();
+setInterval(loadAll, AUTO_REFRESH_MIN*60*1000);
+</script>
+</body>
+</html>
