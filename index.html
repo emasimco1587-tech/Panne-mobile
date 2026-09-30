@@ -108,7 +108,7 @@ body.dragging #map{outline:4px dashed var(--bouygues);outline-offset:-8px}
           <label><input type="checkbox" id="fOK"> Sites rétablis (OK)</label>
         </div>
         <div class="row"><span class="t">Réseau électrique</span>
-          <label><input type="checkbox" id="fPostes"> Postes électriques RTE</label>
+          <label><input type="checkbox" id="fPostes"> Postes électriques HT (63–400 kV)</label>
           <span id="postesInfo" style="color:var(--muted);font-size:12px"></span>
         </div>
         <div class="btns">
@@ -163,10 +163,11 @@ const SOURCES = [
    remote:'https://www.bouyguestelecom.fr/static/com/assets/reseau/siteshs/downloads/antennesindisponibles.csv'},
 ];
 const AUTO_REFRESH_MIN = 30;   // la page relit les fichiers toutes les 30 min
-// Postes électriques RTE — open data ODRÉ (copie locale via GitHub Action, sinon lecture directe)
+// Postes électriques haute tension — positions OpenStreetMap (RTE ne publie plus les coordonnées)
 const POSTES = {
-  local:'data/postes-rte.geojson',
-  remote:'https://odre.opendatasoft.com/api/explore/v2.1/catalog/datasets/postes-electriques-rte/exports/geojson',
+  local:'data/postes-ht.geojson',               // copie hebdomadaire faite par la GitHub Action
+  overpass:'https://overpass-api.de/api/interpreter',
+  query:'[out:json][timeout:180];area["ISO3166-1"="FR"][admin_level=2]->.fr;nwr["power"="substation"]["voltage"~"(^|;)(63|90|150|225|400)000"](area.fr);out center tags;',
 };
 /* ======================================= */
 
@@ -398,92 +399,50 @@ function fitAll(){
 }
 function toast(t){ const el=$('#toast'); el.textContent=t; el.style.display=t?'block':'none'; }
 
-/* ---------- Postes électriques RTE (calque) ---------- */
+/* ---------- Postes électriques haute tension (calque) ---------- */
 const canvasR = L.canvas({padding:.5});
 const postesLayer = L.layerGroup();
 let postesLoaded = false;
-function tensionOf(p){
-  const txt = Object.entries(p).filter(([k])=>/tension|kv|niveau/i.test(k)).map(([,v])=>String(v)).join(' ');
-  const nums = (txt.match(/\d{2,3}(?:[.,]\d)?/g)||[]).map(n=>parseFloat(n.replace(',','.'))).filter(n=>n>=20&&n<=400);
-  return nums.length ? Math.max(...nums) : null;
-}
+const kvList = v => String(v||'').split(/[;,]/).map(x=>parseFloat(x)).filter(x=>x>=1000).map(x=>Math.round(x/1000));
 const tColor = t => t===null?'#8a8f98': t>=380?'#e3001b': t>=200?'#00a650': t>=130?'#1f6fd1': t>=80?'#f28c00': t>=60?'#8e44ad':'#6b7280';
-function coordOf(g){
-  if(!g) return null;
-  if(g.type==='Point') return g.coordinates;
-  const flat=[]; (function walk(a){ if(typeof a[0]==='number') flat.push(a); else a.forEach(walk); })(g.coordinates||[]);
-  if(!flat.length) return null;
-  const xs=flat.map(c=>c[0]), ys=flat.map(c=>c[1]);
-  return [(Math.min(...xs)+Math.max(...xs))/2,(Math.min(...ys)+Math.max(...ys))/2];
+function osmToGeoJSON(j){
+  return {type:'FeatureCollection',features:(j.elements||[]).map(e=>{
+    const lat=e.lat??e.center?.lat, lon=e.lon??e.center?.lon; if(!isFinite(lat)) return null;
+    return {type:'Feature',geometry:{type:'Point',coordinates:[lon,lat]},properties:{...(e.tags||{}),osm:e.type+'/'+e.id}};
+  }).filter(Boolean)};
 }
-const findKey = (p, re) => Object.keys(p).find(k=>re.test(k));
-function postePopup(p, t){
-  const nameK = findKey(p,/^(nom|libelle|name)|nom_?poste|libelle_?poste/i);
-  const codeK = findKey(p,/^code_?poste$|^code$|^code_?site|identifiant/i);
-  const code = codeK ? String(p[codeK]).trim() : '';
-  const rows = Object.entries(p).filter(([k,v])=>v!==null&&v!==''&&typeof v!=='object'&&!/geo|shape|lat|lon/i.test(k))
-    .map(([k,v])=>`<tr><td>${esc(k.replace(/_/g,' '))}</td><td>${esc(v)}</td></tr>`).join('');
-  return `<div class="pop"><div class="op" style="color:${tColor(t)}">⚡ Poste électrique RTE</div>
-    <h3>${esc(nameK?p[nameK]:code||'Poste')}</h3>
-    <table>${rows}</table>
-    ${/^[A-Z0-9]{4,6}$/i.test(code)?`<a target="_blank" rel="noopener" href="https://app.raccordable.com/map/poste/${encodeURIComponent(code.toUpperCase())}">Voir sur Raccordable ↗</a>`:''}
-    <div class="meta" style="margin:6px 0 0">Source : RTE / ODRÉ (open data). Position publiée par RTE, précision volontairement limitée.</div></div>`;
+function postePopup(p,kv){
+  const t=kv.length?Math.max(...kv):null;
+  const code=(p['ref:FR:RTE']||p['ref:RTE']||'').trim();
+  const nom=p.name||p['name:fr']||code||'Poste électrique';
+  const rows=[['Tension',kv.length?kv.join(' / ')+' kV':'—'],['Exploitant',p.operator||'—'],['Code RTE',code||'—'],['Type',p.substation||'—']]
+    .map(([k,v])=>`<tr><td>${k}</td><td>${esc(v)}</td></tr>`).join('');
+  return `<div class="pop"><div class="op" style="color:${tColor(t)}">⚡ Poste électrique</div><h3>${esc(nom)}</h3><table>${rows}</table>
+    ${code?`<a target="_blank" rel="noopener" href="https://app.raccordable.com/map/poste/${encodeURIComponent(code.toUpperCase())}">Voir sur Raccordable ↗</a> · `:''}
+    <a target="_blank" rel="noopener" href="https://www.openstreetmap.org/${p.osm}">OpenStreetMap ↗</a>
+    <div class="meta" style="margin:6px 0 0">Position : © contributeurs OpenStreetMap (ODbL).</div></div>`;
 }
 async function loadPostes(){
   const info=$('#postesInfo'); info.textContent='chargement…';
-  let feats=null, errs=[];
-  const tries=[
-    [POSTES.local+'?t='+Date.now(),'geojson'],
-    [POSTES.remote,'geojson'],
-    [POSTES.remote.replace('/exports/geojson','/exports/json'),'json'],
-  ];
-  for(const [u,kind] of tries){
-    try{
-      const r=await fetch(u,{cache:'no-store'});
-      if(!r.ok){ errs.push(`${kind} HTTP ${r.status}`); continue; }
-      const j=await r.json();
-      const f = kind==='geojson' ? (j.features||[]) : (Array.isArray(j)?j:[]).map(p=>({geometry:null,properties:p}));
-      if(f.length){ feats=f; break; } errs.push(kind+' vide');
-    }catch(e){ errs.push(kind+' '+(e.message||'erreur')); }
-  }
-  if(!feats){ info.textContent='indisponible ('+errs.join(' · ')+')'; console.warn('Postes RTE',errs); return false; }
-
-  // position : géométrie > champs lat/lon > centre de la commune (code INSEE ou nom)
-  const pts=[]; const needCommune=[];
-  for(const f of feats){
-    const p={...(f.properties||{})};
-    let c=coordOf(f.geometry);
-    if(!c){ for(const v of Object.values(p)){ if(v&&typeof v==='object'&&isFinite(v.lat)&&isFinite(v.lon)){ c=[+v.lon,+v.lat]; break; }
-        if(v&&typeof v==='object'&&v.type&&v.coordinates){ c=coordOf(v); if(c) break; } } }
-    if(!c){ const la=findKey(p,/^(lat|latitude)$/i), lo=findKey(p,/^(lon|lng|long|longitude)$/i);
-      if(la&&lo&&isFinite(num(p[la]))&&isFinite(num(p[lo]))) c=[num(p[lo]),num(p[la])]; }
-    const item={p,c,t:tensionOf(p)}; pts.push(item); if(!c) needCommune.push(item);
-  }
-  let approx=0;
-  if(needCommune.length){
-    info.textContent='positionnement par commune…';
-    try{
-      const r=await fetch('https://geo.api.gouv.fr/communes?fields=nom,code,centre,codeDepartement&format=json');
-      const com=await r.json(); const byCode={}, byName={};
-      for(const x of com){ if(!x.centre) continue; byCode[x.code]=x.centre.coordinates; byName[norm(x.nom)+'|'+x.codeDepartement]=x.centre.coordinates; byName[norm(x.nom)]??=x.centre.coordinates; }
-      for(const it of needCommune){ const p=it.p;
-        const ik=findKey(p,/insee|code_?commune/i); const nk=findKey(p,/^commune|nom_?commune|libelle_?commune/i); const dk=findKey(p,/departement|dept/i);
-        const code=ik?String(p[ik]).padStart(5,'0'):''; const nom=nk?norm(String(p[nk])):''; const dep=dk?String(p[dk]).match(/\d{2,3}|2[AB]/i)?.[0]:'';
-        const c=byCode[code]||(nom&&(byName[nom+'|'+dep]||byName[nom]));
-        if(c){ it.c=c; it.approx=true; approx++; } }
-    }catch(e){ console.warn('geo.api',e); }
+  let gj=null;
+  try{ const r=await fetch(POSTES.local+'?t='+Date.now(),{cache:'no-store'}); if(r.ok) gj=await r.json(); }catch{}
+  if(!gj?.features?.length){
+    info.textContent='chargement depuis OpenStreetMap (≈30 s)…';
+    try{ const r=await fetch(POSTES.overpass,{method:'POST',body:'data='+encodeURIComponent(POSTES.query),headers:{'Content-Type':'application/x-www-form-urlencoded'}});
+      if(!r.ok) throw new Error('HTTP '+r.status); gj=osmToGeoJSON(await r.json()); }
+    catch(e){ info.textContent='indisponible ('+(e.message||'erreur')+'), réessaie dans 1 min'; return false; }
   }
   postesLayer.clearLayers(); let n=0;
-  for(const {p,c,t,approx:ap} of pts){ if(!c) continue;
-    L.circleMarker([c[1],c[0]],{renderer:canvasR,radius:t>=380?5:t>=200?4:3,color:'#fff',weight:1,fillColor:tColor(t),fillOpacity:.9,dashArray:ap?'2 2':null})
-      .bindPopup(()=>postePopup(p,t)+(ap?'<div class="meta">📍 Position approximative : centre de la commune.</div>':'')).addTo(postesLayer); n++; }
+  for(const f of gj.features){ const c=f.geometry?.coordinates; if(!c) continue;
+    const p=f.properties||{}; const kv=kvList(p.voltage); const t=kv.length?Math.max(...kv):null;
+    L.circleMarker([c[1],c[0]],{renderer:canvasR,radius:t>=380?5:t>=200?4:3,color:'#fff',weight:1,fillColor:tColor(t),fillOpacity:.9})
+      .bindPopup(()=>postePopup(p,kv)).addTo(postesLayer); n++; }
   postesLoaded=n>0;
-  if(!n){ info.textContent=`${pts.length} postes trouvés mais aucune position exploitable`; console.warn('Exemple poste RTE',pts[0]?.p); return false; }
-  info.innerHTML=`${n}/${pts.length} postes${approx?` (dont ${approx} au centre de la commune)`:''} · <span style="color:#e3001b">●</span>400 <span style="color:#00a650">●</span>225 <span style="color:#f28c00">●</span>90 <span style="color:#8e44ad">●</span>63 kV`;
-  return true;
+  info.innerHTML=`${n} postes · <span style="color:#e3001b">●</span>400 <span style="color:#00a650">●</span>225 <span style="color:#1f6fd1">●</span>150 <span style="color:#f28c00">●</span>90 <span style="color:#8e44ad">●</span>63 kV`;
+  return postesLoaded;
 }
 $('#fPostes').onchange=async e=>{
-  if(e.target.checked){ if(!postesLoaded && !(await loadPostes())){ e.target.checked=false; return; } postesLayer.addTo(map); postesLayer.eachLayer(l=>l.bringToBack&&l.bringToBack()); }
+  if(e.target.checked){ if(!postesLoaded && !(await loadPostes())){ e.target.checked=false; return; } postesLayer.addTo(map); }
   else map.removeLayer(postesLayer);
 };
 
