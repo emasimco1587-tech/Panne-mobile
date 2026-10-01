@@ -127,7 +127,8 @@ body.dragging #map{outline:4px dashed var(--bouygues);outline-offset:-8px}
         </div>
         <div class="row"><span class="t">Réseau électrique</span>
           <label><input type="checkbox" id="fPostes"> Postes électriques HT (63–400 kV)</label>
-          <span id="postesInfo" style="color:var(--muted);font-size:12px"></span>
+          <span id="postesInfo" style="color:var(--muted);font-size:12px;width:100%"></span>
+          <button id="majPostes" title="Retélécharger la liste des postes depuis OpenStreetMap (1 à 2 min)">↻ Mettre à jour les postes</button>
         </div>
         <div class="btns">
           <button id="reload">↻ Actualiser</button>
@@ -205,7 +206,6 @@ const POSTES = {
   mirrors:['https://overpass-api.de/api/interpreter','https://overpass.private.coffee/api/interpreter',
            'https://overpass.kumi.systems/api/interpreter','https://maps.mail.ru/osm/tools/overpass/api/interpreter'],
   query:b=>`[out:json][timeout:60];nwr["power"="substation"]["voltage"~"(^|;)(63|90|150|225|400)000"](${b.join(',')});out center tags;`,
-  cacheDays:7,
 };
 (()=>{ const L_=[[41,44],[44,46],[46,48.5],[48.5,51.5]], W=[[-5.5,0.5],[0.5,5],[5,10]]; POSTES.tiles=[]; for(const [s,n] of L_) for(const [w,e] of W) POSTES.tiles.push([s,w,n,e]); })();
 /* ======================================= */
@@ -492,26 +492,61 @@ async function fetchPostesOSM(info){
       }catch{}
     }
   }
-  return {gj:{type:'FeatureCollection',features:feats}, complete:ok===POSTES.tiles.length};
+  return {gj:{type:'FeatureCollection',features:feats}, complete:ok===POSTES.tiles.length, missing:POSTES.tiles.length-ok};
 }
+/* Stockage durable dans le navigateur (IndexedDB) : les postes restent enregistrés jusqu'à une mise à jour manuelle */
+const store={
+  db:null,
+  open(){ return this.db||(this.db=new Promise((ok,ko)=>{ const r=indexedDB.open('pannes-mobiles',1);
+    r.onupgradeneeded=()=>r.result.createObjectStore('kv'); r.onsuccess=()=>ok(r.result); r.onerror=()=>ko(r.error); })); },
+  async get(k){ try{ const db=await this.open(); return await new Promise((ok,ko)=>{ const q=db.transaction('kv').objectStore('kv').get(k); q.onsuccess=()=>ok(q.result); q.onerror=()=>ko(q.error); }); }
+    catch{ try{ return JSON.parse(localStorage.getItem(k)); }catch{ return null; } } },
+  async set(k,v){ try{ const db=await this.open(); await new Promise((ok,ko)=>{ const t=db.transaction('kv','readwrite'); t.objectStore('kv').put(v,k); t.oncomplete=ok; t.onerror=()=>ko(t.error); }); return true; }
+    catch{ try{ localStorage.setItem(k,JSON.stringify(v)); return true; }catch{ return false; } } },
+};
+const KEEP=['name','name:fr','voltage','operator','ref:FR:RTE','ref:RTE','substation','osm'];
+const compact=gj=>(gj.features||[]).filter(f=>f.geometry?.type==='Point').map(f=>{ const p={}; for(const k of KEEP) if(f.properties?.[k]) p[k]=f.properties[k];
+  return [+f.geometry.coordinates[1].toFixed(5), +f.geometry.coordinates[0].toFixed(5), p]; });
+const expand=rows=>({type:'FeatureCollection',features:rows.map(([la,lo,p])=>({type:'Feature',geometry:{type:'Point',coordinates:[lo,la]},properties:p}))});
+let postesMeta=null, lastGj=null;
+function showPostes(gj){
+  lastGj=gj;
+  postes.length=0; postes.push(...postesFromGeo(gj)); postesLayer.clearLayers();
+  for(const P of postes){ P.m=L.circleMarker([P.lat,P.lon],{renderer:canvasR,radius:P.t>=380?5:P.t>=200?4:3,color:'#fff',weight:1,fillColor:tColor(P.t),fillOpacity:.9})
+    .bindPopup(()=>postePopup(P.p,P.kv)+alertDetail(P)).addTo(postesLayer); }
+  buildGrid(); postesLoaded=postes.length>0;
+  const m=postesMeta;
+  $('#postesInfo').innerHTML=`${postes.length} postes${m?` · enregistrés le ${new Date(m.at).toLocaleDateString('fr-FR')}`:''}${m&&!m.complete?` · <b style="color:#c62828">incomplet (${m.missing} zone(s) manquante(s)) : clique « Mettre à jour »</b>`:''}<br><span style="color:#e3001b">●</span>400 <span style="color:#00a650">●</span>225 <span style="color:#1f6fd1">●</span>150 <span style="color:#f28c00">●</span>90 <span style="color:#8e44ad">●</span>63 kV`;
+  render();
+}
+async function saveAndShow(gj,complete,missing){
+  const rows=compact(gj); postesMeta={at:Date.now(),complete,missing:missing||0};
+  const ok=await store.set('postesHT',{...postesMeta,rows});
+  if(!ok) console.warn('Impossible d\'enregistrer les postes dans le navigateur');
+  showPostes(expand(rows));
+}
+// Démarrage : 1) copie enregistrée dans le navigateur  2) fichier du dépôt GitHub  3) téléchargement OpenStreetMap (une seule fois)
 function loadPostes(){
   if(postesLoading) return postesLoading;
   return postesLoading=(async()=>{
     const info=$('#postesInfo'); info.textContent='chargement…';
-    let gj=null, src='';
-    for(const u of POSTES.files){ try{ const r=await fetch(u,{cache:'no-cache'}); if(r.ok){ const j=await r.json(); if(j?.features?.length){ gj=j; src='fichier'; break; } } }catch{} }
-    if(!gj){ try{ const c=JSON.parse(localStorage.getItem('postesHT')||'null'); if(c && Date.now()-c.at < POSTES.cacheDays*864e5){ gj=c.gj; src='cache'; } }catch{} }
-    if(!gj){ const r=await fetchPostesOSM(info); if(r.gj.features.length){ gj=r.gj; src='OSM';
-        if(r.complete){ try{ localStorage.setItem('postesHT',JSON.stringify({at:Date.now(),gj})); }catch{} } } }
-    if(!gj){ info.textContent='indisponible (serveurs OpenStreetMap saturés) — réessaie plus tard'; postesLoading=null; return false; }
-    postes.length=0; postes.push(...postesFromGeo(gj)); postesLayer.clearLayers();
-    for(const P of postes){ P.m=L.circleMarker([P.lat,P.lon],{renderer:canvasR,radius:P.t>=380?5:P.t>=200?4:3,color:'#fff',weight:1,fillColor:tColor(P.t),fillOpacity:.9})
-      .bindPopup(()=>postePopup(P.p,P.kv)+alertDetail(P)).addTo(postesLayer); }
-    buildGrid(); postesLoaded=true;
-    info.innerHTML=`${postes.length} postes · <span style="color:#e3001b">●</span>400 <span style="color:#00a650">●</span>225 <span style="color:#1f6fd1">●</span>150 <span style="color:#f28c00">●</span>90 <span style="color:#8e44ad">●</span>63 kV`;
-    render(); return true;
+    const saved=await store.get('postesHT');
+    if(saved?.rows?.length){ postesMeta={at:saved.at,complete:saved.complete,missing:saved.missing}; showPostes(expand(saved.rows)); return true; }
+    for(const u of POSTES.files){ try{ const r=await fetch(u,{cache:'no-cache'}); if(r.ok){ const j=await r.json(); if(j?.features?.length){ await saveAndShow(j,true,0); return true; } } }catch{} }
+    return await updatePostes();
   })();
 }
+// Mise à jour MANUELLE (bouton) : retélécharge depuis OpenStreetMap et remplace la copie enregistrée
+async function updatePostes(){
+  const btn=$('#majPostes'); btn.disabled=true;
+  const r=await fetchPostesOSM($('#postesInfo'));
+  btn.disabled=false;
+  if(!r.gj.features.length){ postesLoading=null;
+    if(lastGj){ showPostes(lastGj); $('#postesInfo').insertAdjacentHTML('afterbegin','<b style="color:#c62828">Mise à jour impossible (serveurs saturés), anciens postes conservés.</b><br>'); return true; }
+    $('#postesInfo').textContent='téléchargement impossible (serveurs OpenStreetMap saturés) — réessaie avec « Mettre à jour les postes »'; return false; }
+  await saveAndShow(r.gj,r.complete,r.missing); return true;
+}
+$('#majPostes').onclick=()=>{ if(confirm('Retélécharger tous les postes depuis OpenStreetMap ? (1 à 2 minutes)')){ postesLoading=Promise.resolve(updatePostes()); } };
 $('#fPostes').onchange=async e=>{
   if(e.target.checked){ if(!(await loadPostes())){ e.target.checked=false; return; } postesLayer.addTo(map); }
   else map.removeLayer(postesLayer);
