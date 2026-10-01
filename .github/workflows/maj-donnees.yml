@@ -37,13 +37,12 @@ jobs:
           echo "{\"updated\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"sources\":{$R1,$R2,$R3,$R4}}" > data/meta.json
           cat data/meta.json
 
-      - name: Postes électriques HT (OpenStreetMap, 1 fois par semaine)
+      - name: Postes électriques HT (OpenStreetMap, seulement au lancement manuel ou si absent)
         continue-on-error: true
         run: |
           F=data/postes-ht.geojson
-          T=$(git log -1 --format=%ct -- "$F" 2>/dev/null); T=${T:-0}
-          if [ -f "$F" ] && [ $(( $(date +%s) - T )) -lt 604800 ]; then
-            echo "Postes à jour (moins de 7 jours)."; exit 0
+          if [ -f "$F" ] && [ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ]; then
+            echo "Postes déjà présents : mise à jour uniquement via « Run workflow »."; exit 0
           fi
           rm -f osm_*.json; i=0
           for LAT in "41,44" "44,46" "46,48.5" "48.5,51.5"; do for LON in "-5.5,0.5" "0.5,5" "5,10"; do
